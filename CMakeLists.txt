@@ -40,6 +40,8 @@ ADD_LIBRARY( free5GRAN_lib STATIC
         lib/phy/physical_channel/physical_channel.h
         lib/rf/rf.cpp
         lib/rf/rf.h
+        lib/rf/file_source/file_source.cpp
+        lib/rf/file_source/file_source.h
         lib/rf/usrp_b200/usrp_b200.cpp
         lib/rf/usrp_b200/usrp_b200.h
         lib/rf/usrp_x300/usrp_x300.cpp
