@@ -511,14 +511,9 @@ extract_dci_and_sib:
     index_last_frame += 2;
   }
   // If dci successfully decoded
-  if (!dci_found) {
-    cout << "SIB1 data could not be decoded ! Waiting 2 sec and trying again"
-         << endl;
-    // If failed, wait 2 sec and retry DCI and SIB1 extraction
-    if (!*stop_signal) {
-      usleep(2000000);
-      goto extract_dci_and_sib;
-    }
+  if (!dci_found && !*stop_signal) {
+    cout << "SIB1 data could not be decoded ! Retrying immediately" << endl;
+    goto extract_dci_and_sib;
   }
   return 0;
 }
