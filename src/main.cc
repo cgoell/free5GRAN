@@ -41,6 +41,7 @@
 #include <uhd/utils/safe_main.hpp>
 #include <uhd/utils/thread.hpp>
 
+#include "../lib/rf/file_source/file_source.h"
 #include "../lib/rf/rf.h"
 #include "../lib/rf/usrp_b200/usrp_b200.h"
 #include "../lib/rf/usrp_x300/usrp_x300.h"
@@ -73,11 +74,15 @@ using found_cell = struct found_cell_ {
 void search_cell_with_defined_params(double frequency,
                                      double ssb_period,
                                      const string& rf_address,
+                                     const string& iq_file_path,
+                                     double iq_sample_rate,
                                      free5GRAN::band band,
                                      int input_gain);
 void scan_bands(vector<free5GRAN::band> BANDS,
                 double ssb_period,
                 const string& rf_address,
+                const string& iq_file_path,
+                double iq_sample_rate,
                 int input_gain);
 void init_logging(const string& level);
 
@@ -141,6 +146,13 @@ auto main(int argc, char* argv[]) -> int {
     if (!root.lookupValue("rf_address", rf_address)) {
       rf_address = "";
     }
+    string iq_file_path;
+    double iq_sample_rate = 30.72e6;
+    bool use_iq_file = root.lookupValue("iq_file_path", iq_file_path);
+    if (use_iq_file) {
+      root.lookupValue("iq_sample_rate", iq_sample_rate);
+      cout << "Using IQ samples from file: " << iq_file_path << endl;
+    }
     int gain = cfg.lookup("gain");
     // If receiver mode is search cell
     if (func == "CELL_SEARCH") {
@@ -180,6 +192,7 @@ auto main(int argc, char* argv[]) -> int {
             }
             // Call search cell function
             search_cell_with_defined_params(frequency, ssb_period, rf_address,
+                                            iq_file_path, iq_sample_rate,
                                             band_obj, gain);
           } else {
             // Missing a parameter
@@ -219,7 +232,8 @@ auto main(int argc, char* argv[]) -> int {
         ssb_period = 0.02;
       }
       // call function
-      scan_bands(band_array, ssb_period, rf_address, gain);
+      scan_bands(band_array, ssb_period, rf_address, iq_file_path,
+                 iq_sample_rate, gain);
     }
   } catch (const libconfig::SettingNotFoundException& nfex) {
     // Some parameters are missing
@@ -232,6 +246,8 @@ auto main(int argc, char* argv[]) -> int {
 void scan_bands(vector<free5GRAN::band> BANDS,
                 double ssb_period,
                 const string& rf_address,
+                const string& iq_file_path,
+                double iq_sample_rate,
                 int input_gain) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
   /*
@@ -272,23 +288,29 @@ void scan_bands(vector<free5GRAN::band> BANDS,
   // Initialize semaphore
   sem_init(rf_buff.semaphore, 1, 0);
 
+  bool use_iq_file = !iq_file_path.empty();
   /*
    * Find USRP device with input parameters parameters
    */
   free5GRAN::rf_device chosen_device;
-  free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
-  if (chosen_device.type.empty()) {
-    cout << "Cannot find USRP device ! Exiting..." << endl;
-    return;
-  } else {
-    cout << "Using USRP " << chosen_device.type << " device" << endl;
+  if (!use_iq_file) {
+    free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
+    if (chosen_device.type.empty()) {
+      cout << "Cannot find USRP device ! Exiting..." << endl;
+      return;
+    } else {
+      cout << "Using USRP " << chosen_device.type << " device" << endl;
+    }
   }
   /*
    * Create RF device depending on RF type.
    */
-  double bandwidth = 30.72e6;
+  double bandwidth = use_iq_file ? iq_sample_rate : 30.72e6;
   free5GRAN::rf* rf_device;
-  if (chosen_device.type == "b200") {
+  if (use_iq_file) {
+    rf_device = new free5GRAN::file_source(iq_file_path, bandwidth, freq, gain,
+                                           &rf_buff);
+  } else if (chosen_device.type == "b200") {
     rf_device = new free5GRAN::usrp_b200(bandwidth, freq, gain, bandwidth,
                                          chosen_device, &rf_buff);
   } else if (chosen_device.type == "x300") {
@@ -475,6 +497,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
 void search_cell_with_defined_params(double frequency,
                                      double ssb_period,
                                      const string& rf_address,
+                                     const string& iq_file_path,
+                                     double iq_sample_rate,
                                      free5GRAN::band band,
                                      int input_gain) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
@@ -523,23 +547,29 @@ void search_cell_with_defined_params(double frequency,
   };
   // Initialize semaphore
   sem_init(rf_buff.semaphore, 1, 0);
+  bool use_iq_file = !iq_file_path.empty();
   /*
    * Find USRP device with input parameters parameters
    */
   free5GRAN::rf_device chosen_device;
-  free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
-  if (chosen_device.type.empty()) {
-    cout << "Cannot find USRP device ! Exiting..." << endl;
-    return;
-  } else {
-    cout << "Using USRP " << chosen_device.type << " device" << endl;
+  if (!use_iq_file) {
+    free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
+    if (chosen_device.type.empty()) {
+      cout << "Cannot find USRP device ! Exiting..." << endl;
+      return;
+    } else {
+      cout << "Using USRP " << chosen_device.type << " device" << endl;
+    }
   }
   /*
    * Create RF device depending on RF type.
    */
-  double bandwidth = 30.72e6;
+  double bandwidth = use_iq_file ? iq_sample_rate : 30.72e6;
   free5GRAN::rf* rf_device;
-  if (chosen_device.type == "b200") {
+  if (use_iq_file) {
+    rf_device = new free5GRAN::file_source(iq_file_path, bandwidth, frequency,
+                                           gain, &rf_buff);
+  } else if (chosen_device.type == "b200") {
     rf_device = new free5GRAN::usrp_b200(bandwidth, frequency, gain, bandwidth,
                                          chosen_device, &rf_buff);
   } else if (chosen_device.type == "x300") {
@@ -615,8 +645,7 @@ phy_initialization:
       rf_device->setGain(rf_device->getGain() - 5);
       cout << "Decreasing gain to " << rf_device->getGain() << " dB" << endl;
     } else {
-      cout << "MIB decoding failed, trying again in 2 sec" << endl;
-      usleep(2000000);
+      cout << "MIB decoding failed, retrying immediately" << endl;
     }
     // Retry to synchronize with cell
     if (!stop_signal) {

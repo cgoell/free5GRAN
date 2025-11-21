@@ -23,9 +23,11 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/file.hpp>
+#include <atomic>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <vector>
 
 #include "../../lib/asn1c/nr_rrc/BCCH-DL-SCH-Message.h"
@@ -217,6 +219,9 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   /*
    * Get 1 SSB period of signal
    */
+  static std::atomic<uint64_t> mib_attempt_counter{0};
+  static size_t last_attempt_print_len = 0;
+  const uint64_t attempt_id = ++mib_attempt_counter;
   int number_of_frames = ceil(ssb_period / 0.01);  // = 10ms
   // Create a vector of frames containing 1 SSB period of signal
   vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
@@ -282,17 +287,46 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
       merged_frames, pss_start_index, received_power, this->current_bwp,
       this->pci, this->freq_offset, this->rf_device->getSampleRate(),
       this->i_ssb, this->ss_pwr, this->mib_object, this->l_max);
+  auto end = chrono::high_resolution_clock::now();
+  auto duration = chrono::duration_cast<chrono::microseconds>(end - start);
   ss_pwr.received_power = received_power;
+  auto print_attempt_summary = [&](const string& reason, bool newline) {
+    std::ostringstream oss;
+    oss << "[MIB attempt " << attempt_id << "] " << reason
+        << ": CRC=" << (mib_object.crc_validated ? 1 : 0)
+        << ", Pwr=" << received_power << " dB, PCI=" << pci
+        << ", i_ssb=" << i_ssb << ", k_ssb=" << mib_object.k_ssb
+        << ", half_frame=" << mib_object.half_frame_index
+        << ", freq_offset=" << freq_offset << " Hz"
+        << ", pss_index=" << pss_start_index
+        << ", duration=" << duration.count() << " us";
+    const string message = oss.str();
+    const size_t padding =
+        last_attempt_print_len > message.size()
+            ? last_attempt_print_len - message.size()
+            : 0;
+
+    cout << '\r' << message;
+    if (padding > 0) {
+      cout << string(padding, ' ');
+    }
+    if (newline) {
+      cout << endl;
+      last_attempt_print_len = 0;
+    } else {
+      cout << flush;
+      last_attempt_print_len = message.size();
+    }
+  };
   // If received power greater than -2dB, then there might be saturation and
   // reception will fail
   if (received_power > -2) {
+    print_attempt_summary("SSB power gate triggered", true);
     sync_object.mib_crc_val = false;
     sync_object.received_power = received_power;
     cond_var_cell_sync.notify_all();
     return 1;
   }
-  auto end = chrono::high_resolution_clock::now();
-  auto duration = chrono::duration_cast<chrono::microseconds>(end - start);
 
   /*
   int num_symbols_per_subframe_pbch =
@@ -340,8 +374,10 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   // Notify main thread that synchronization has been done
   cond_var_cell_sync.notify_all();
   if (!mib_object.crc_validated) {
+    print_attempt_summary("PBCH/MIB CRC failed", false);
     return 1;
   } else {
+    print_attempt_summary("PBCH/MIB CRC passed", true);
     print_cell_info();
   }
 
@@ -511,14 +547,9 @@ extract_dci_and_sib:
     index_last_frame += 2;
   }
   // If dci successfully decoded
-  if (!dci_found) {
-    cout << "SIB1 data could not be decoded ! Waiting 2 sec and trying again"
-         << endl;
-    // If failed, wait 2 sec and retry DCI and SIB1 extraction
-    if (!*stop_signal) {
-      usleep(2000000);
-      goto extract_dci_and_sib;
-    }
+  if (!dci_found && !*stop_signal) {
+    cout << "SIB1 data could not be decoded ! Retrying immediately" << endl;
+    goto extract_dci_and_sib;
   }
   return 0;
 }
