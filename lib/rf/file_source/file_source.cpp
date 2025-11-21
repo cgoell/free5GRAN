@@ -77,6 +77,11 @@ void free5GRAN::file_source::start_loopback_recv(bool& stop_signal,
   bool last_notify = false;
 
   while (!stop_signal) {
+    if (primary_frame_id == 6000) {
+      primary_frame_id = 0;
+    }
+
+    new_elem.overflow = false;
     {
       lock_guard<mutex> lock(file_mutex);
       size_t total_read = 0;
