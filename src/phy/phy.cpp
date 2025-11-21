@@ -220,7 +220,6 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
    * Get 1 SSB period of signal
    */
   static std::atomic<uint64_t> mib_attempt_counter{0};
-  static size_t last_attempt_print_len = 0;
   const uint64_t attempt_id = ++mib_attempt_counter;
   int number_of_frames = ceil(ssb_period / 0.01);  // = 10ms
   // Create a vector of frames containing 1 SSB period of signal
@@ -290,38 +289,20 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   auto end = chrono::high_resolution_clock::now();
   auto duration = chrono::duration_cast<chrono::microseconds>(end - start);
   ss_pwr.received_power = received_power;
-  auto print_attempt_summary = [&](const string& reason, bool newline) {
-    std::ostringstream oss;
-    oss << "[MIB attempt " << attempt_id << "] " << reason
-        << ": CRC=" << (mib_object.crc_validated ? 1 : 0)
-        << ", Pwr=" << received_power << " dB, PCI=" << pci
-        << ", i_ssb=" << i_ssb << ", k_ssb=" << mib_object.k_ssb
-        << ", half_frame=" << mib_object.half_frame_index
-        << ", freq_offset=" << freq_offset << " Hz"
-        << ", pss_index=" << pss_start_index
-        << ", duration=" << duration.count() << " us";
-    const string message = oss.str();
-    const size_t padding =
-        last_attempt_print_len > message.size()
-            ? last_attempt_print_len - message.size()
-            : 0;
-
-    cout << '\r' << message;
-    if (padding > 0) {
-      cout << string(padding, ' ');
-    }
-    if (newline) {
-      cout << endl;
-      last_attempt_print_len = 0;
-    } else {
-      cout << flush;
-      last_attempt_print_len = message.size();
-    }
+  auto print_attempt_summary = [&](const string& reason) {
+    cout << "[MIB attempt " << attempt_id << "] " << reason
+         << ": CRC=" << (mib_object.crc_validated ? 1 : 0)
+         << ", Pwr=" << received_power << " dB, PCI=" << pci
+         << ", i_ssb=" << i_ssb << ", k_ssb=" << mib_object.k_ssb
+         << ", half_frame=" << mib_object.half_frame_index
+         << ", freq_offset=" << freq_offset << " Hz"
+         << ", pss_index=" << pss_start_index
+         << ", duration=" << duration.count() << " us" << endl;
   };
   // If received power greater than -2dB, then there might be saturation and
   // reception will fail
   if (received_power > -2) {
-    print_attempt_summary("SSB power gate triggered", true);
+    print_attempt_summary("SSB power gate triggered");
     sync_object.mib_crc_val = false;
     sync_object.received_power = received_power;
     cond_var_cell_sync.notify_all();
@@ -374,7 +355,7 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   // Notify main thread that synchronization has been done
   cond_var_cell_sync.notify_all();
   if (!mib_object.crc_validated) {
-    print_attempt_summary("PBCH/MIB CRC failed", false);
+    print_attempt_summary("PBCH/MIB CRC failed");
     return 1;
   } else {
     print_attempt_summary("PBCH/MIB CRC passed", true);
