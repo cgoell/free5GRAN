@@ -32,9 +32,13 @@ void free5GRAN::file_source::get_samples(vector<complex<float>>& buff,
   uhd::set_thread_priority_safe(1.0, true);
   lock_guard<mutex> lock(file_mutex);
 
-  size_t total_read = read_samples(buff, 0, buff.size());
-  if (total_read < buff.size()) {
-    throw runtime_error("Unable to read enough samples from file source");
+  size_t total_read = 0;
+  while (total_read < buff.size()) {
+    size_t just_read = read_samples(buff, total_read, buff.size() - total_read);
+    if (just_read == 0) {
+      throw runtime_error("Unable to read enough samples from file source");
+    }
+    total_read += just_read;
   }
 
   time_first_sample = static_cast<double>(sample_offset) / sample_rate;
@@ -75,12 +79,17 @@ void free5GRAN::file_source::start_loopback_recv(bool& stop_signal,
   while (!stop_signal) {
     {
       lock_guard<mutex> lock(file_mutex);
-      size_t total_read = read_samples(new_elem.buffer, 0, buff_size);
-      if (total_read < buff_size) {
-        new_elem.overflow = true;
-      } else {
-        new_elem.overflow = false;
+      size_t total_read = 0;
+      while (total_read < buff_size) {
+        size_t just_read =
+            read_samples(new_elem.buffer, total_read, buff_size - total_read);
+        if (just_read == 0) {
+          new_elem.overflow = true;
+          break;
+        }
+        total_read += just_read;
       }
+      new_elem.overflow = total_read < buff_size;
       sample_offset += total_read;
     }
 
