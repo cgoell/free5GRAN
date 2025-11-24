@@ -86,7 +86,8 @@ class phy {
   }
 
   auto init(free5GRAN::synchronization_object& sync_object,
-            condition_variable& cond_var_cell_sync) -> int;
+            condition_variable& cond_var_cell_sync,
+            bool continuous_mib_decode) -> int;
 };
 
 #endif

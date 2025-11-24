@@ -200,7 +200,8 @@ auto phy::getSIB1RV() -> int {
 }
 
 auto phy::init(free5GRAN::synchronization_object& sync_object,
-               condition_variable& cond_var_cell_sync) -> int {
+               condition_variable& cond_var_cell_sync,
+               bool continuous_mib_decode) -> int {
   /**
    * \fn init
    * \brief Adjust primary buffer frames into gNodeB-synchronized frames
@@ -215,6 +216,8 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
    * \param[in] sync_object: Structure containing synchronization variables
    * \param[in] cond_var_cell_sync: Condition variable for notifying cell
    * synchronization
+   * \param[in] continuous_mib_decode: Keep decoding and reporting MIB contents
+   * after the first successful CRC validation
   */
   /*
    * Get 1 SSB period of signal
@@ -224,8 +227,8 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   frame_size = 0.01 * rf_device->getSampleRate();
 
   mutex m;
-  bool mib_decoded = false;
-  while (!mib_decoded && !(*stop_signal)) {
+  bool sync_notified = false;
+  while (!(*stop_signal)) {
     // Create a vector of frames containing 1 SSB period of signal
     vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
     // Create a vector containing all the frames for 1 SSB period (consecutively)
@@ -359,20 +362,24 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
     }
 
     print_cell_info();
-    mib_decoded = true;
+    if (!sync_notified) {
+      cond_var_cell_sync.notify_all();
+      sync_notified = true;
+    }
+
+    // Continue to refresh MIB contents if requested; otherwise exit after the
+    // first validated decode.
+    if (!continuous_mib_decode) {
+      return 0;
+    }
   }
 
-  if (!mib_decoded) {
+  if (!sync_notified) {
     sync_object.mib_crc_val = false;
     cond_var_cell_sync.notify_all();
     return 1;
   }
 
-  // Notify main thread that synchronization has been done
-  cond_var_cell_sync.notify_all();
-
-  // Only MIB decoding is performed in this build. Skip SIB1/PDSCH processing
-  // and exit once MIB information has been reported.
   return 0;
 }
 

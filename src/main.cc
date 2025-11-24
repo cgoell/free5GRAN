@@ -414,7 +414,7 @@ void scan_bands(vector<free5GRAN::band> BANDS,
       // Run init function.
       // It will first synchronize with the cell and decode MIB only
       boost::thread phy_init([&phy_layer, &sync_object, &sync_completed] {
-        phy_layer.init(sync_object, sync_completed);
+        phy_layer.init(sync_object, sync_completed, false);
       });
       // Wait PHY layer for cell synchronization
       mutex m;
@@ -599,7 +599,7 @@ phy_initialization:
   // Run init function.
   // It will first synchronize with the cell and decode MIB only
   boost::thread phy_init([&phy_layer, &sync_object, &sync_completed] {
-    phy_layer.init(sync_object, sync_completed);
+    phy_layer.init(sync_object, sync_completed, true);
   });
   // Wait PHY layer for cell synchronization
   mutex m;
