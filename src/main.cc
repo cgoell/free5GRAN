@@ -45,6 +45,7 @@
 #include "../lib/rf/rf.h"
 #include "../lib/rf/usrp_b200/usrp_b200.h"
 #include "../lib/rf/usrp_x300/usrp_x300.h"
+#include "../lib/rf/zmq_source/zmq_source.h"
 #ifdef INCLUDE_N210_OPT
 #include "../lib/rf/usrp_usrp2/usrp_usrp2.h"
 #endif
@@ -76,6 +77,8 @@ void search_cell_with_defined_params(double frequency,
                                      const string& rf_address,
                                      const string& iq_file_path,
                                      double iq_sample_rate,
+                                     const string& zmq_sub_address,
+                                     double zmq_sample_rate,
                                      free5GRAN::band band,
                                      int input_gain);
 void scan_bands(vector<free5GRAN::band> BANDS,
@@ -83,6 +86,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
                 const string& rf_address,
                 const string& iq_file_path,
                 double iq_sample_rate,
+                const string& zmq_sub_address,
+                double zmq_sample_rate,
                 int input_gain);
 void init_logging(const string& level);
 
@@ -153,6 +158,14 @@ auto main(int argc, char* argv[]) -> int {
       root.lookupValue("iq_sample_rate", iq_sample_rate);
       cout << "Using IQ samples from file: " << iq_file_path << endl;
     }
+    string zmq_sub_address;
+    double zmq_sample_rate = 30.72e6;
+    bool use_zmq_source =
+        root.lookupValue("zmq_sub_address", zmq_sub_address) && !use_iq_file;
+    if (use_zmq_source) {
+      root.lookupValue("zmq_sample_rate", zmq_sample_rate);
+      cout << "Using IQ samples from ZMQ SUB at: " << zmq_sub_address << endl;
+    }
     int gain = cfg.lookup("gain");
     // If receiver mode is search cell
     if (func == "CELL_SEARCH") {
@@ -193,6 +206,7 @@ auto main(int argc, char* argv[]) -> int {
             // Call search cell function
             search_cell_with_defined_params(frequency, ssb_period, rf_address,
                                             iq_file_path, iq_sample_rate,
+                                            zmq_sub_address, zmq_sample_rate,
                                             band_obj, gain);
           } else {
             // Missing a parameter
@@ -233,7 +247,7 @@ auto main(int argc, char* argv[]) -> int {
       }
       // call function
       scan_bands(band_array, ssb_period, rf_address, iq_file_path,
-                 iq_sample_rate, gain);
+                 iq_sample_rate, zmq_sub_address, zmq_sample_rate, gain);
     }
   } catch (const libconfig::SettingNotFoundException& nfex) {
     // Some parameters are missing
@@ -248,6 +262,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
                 const string& rf_address,
                 const string& iq_file_path,
                 double iq_sample_rate,
+                const string& zmq_sub_address,
+                double zmq_sample_rate,
                 int input_gain) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
   /*
@@ -289,11 +305,12 @@ void scan_bands(vector<free5GRAN::band> BANDS,
   sem_init(rf_buff.semaphore, 1, 0);
 
   bool use_iq_file = !iq_file_path.empty();
+  bool use_zmq_source = !zmq_sub_address.empty();
   /*
    * Find USRP device with input parameters parameters
    */
   free5GRAN::rf_device chosen_device;
-  if (!use_iq_file) {
+  if (!use_iq_file && !use_zmq_source) {
     free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
     if (chosen_device.type.empty()) {
       cout << "Cannot find USRP device ! Exiting..." << endl;
@@ -305,11 +322,16 @@ void scan_bands(vector<free5GRAN::band> BANDS,
   /*
    * Create RF device depending on RF type.
    */
-  double bandwidth = use_iq_file ? iq_sample_rate : 30.72e6;
+  double bandwidth = use_iq_file
+                         ? iq_sample_rate
+                         : (use_zmq_source ? zmq_sample_rate : 30.72e6);
   free5GRAN::rf* rf_device;
   if (use_iq_file) {
     rf_device = new free5GRAN::file_source(iq_file_path, bandwidth, freq, gain,
                                            &rf_buff);
+  } else if (use_zmq_source) {
+    rf_device = new free5GRAN::zmq_source(zmq_sub_address, bandwidth, freq,
+                                          gain, &rf_buff);
   } else if (chosen_device.type == "b200") {
     rf_device = new free5GRAN::usrp_b200(bandwidth, freq, gain, bandwidth,
                                          chosen_device, &rf_buff);
@@ -499,6 +521,8 @@ void search_cell_with_defined_params(double frequency,
                                      const string& rf_address,
                                      const string& iq_file_path,
                                      double iq_sample_rate,
+                                     const string& zmq_sub_address,
+                                     double zmq_sample_rate,
                                      free5GRAN::band band,
                                      int input_gain) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
@@ -548,11 +572,12 @@ void search_cell_with_defined_params(double frequency,
   // Initialize semaphore
   sem_init(rf_buff.semaphore, 1, 0);
   bool use_iq_file = !iq_file_path.empty();
+  bool use_zmq_source = !zmq_sub_address.empty();
   /*
    * Find USRP device with input parameters parameters
    */
   free5GRAN::rf_device chosen_device;
-  if (!use_iq_file) {
+  if (!use_iq_file && !use_zmq_source) {
     free5GRAN::utils::common_utils::select_rf_device(chosen_device, rf_address);
     if (chosen_device.type.empty()) {
       cout << "Cannot find USRP device ! Exiting..." << endl;
@@ -564,11 +589,16 @@ void search_cell_with_defined_params(double frequency,
   /*
    * Create RF device depending on RF type.
    */
-  double bandwidth = use_iq_file ? iq_sample_rate : 30.72e6;
+  double bandwidth = use_iq_file
+                         ? iq_sample_rate
+                         : (use_zmq_source ? zmq_sample_rate : 30.72e6);
   free5GRAN::rf* rf_device;
   if (use_iq_file) {
     rf_device = new free5GRAN::file_source(iq_file_path, bandwidth, frequency,
                                            gain, &rf_buff);
+  } else if (use_zmq_source) {
+    rf_device = new free5GRAN::zmq_source(zmq_sub_address, bandwidth, frequency,
+                                          gain, &rf_buff);
   } else if (chosen_device.type == "b200") {
     rf_device = new free5GRAN::usrp_b200(bandwidth, frequency, gain, bandwidth,
                                          chosen_device, &rf_buff);
