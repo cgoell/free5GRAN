@@ -48,7 +48,8 @@ phy::phy(free5GRAN::rf* rf_dev,
          int scs,
          free5GRAN::band band_obj,
          free5GRAN::rf_buffer* rf_buff,
-         bool* stp_signal) {
+         bool* stp_signal,
+         bool decode_sib) {
   /**
    * \fn phy
    * \param[in] rf_dev: RF device. (Only USRP B210 is currently supported)
@@ -60,6 +61,7 @@ phy::phy(free5GRAN::rf* rf_dev,
   this->rf_device = rf_dev;
   this->ssb_period = ssb_period;
   this->band_object = band_obj;
+  this->decode_sib = decode_sib;
   l_max = band_obj.ssb_pattern.l_max;
   this->is_extended_cp = 0;
   common_cp_length = 0;
@@ -225,7 +227,8 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
 
   mutex m;
   bool mib_decoded = false;
-  while (!mib_decoded && !(*stop_signal)) {
+  bool sync_notified = false;
+  while (!(*stop_signal)) {
     // Create a vector of frames containing 1 SSB period of signal
     vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
     // Create a vector containing all the frames for 1 SSB period (consecutively)
@@ -360,6 +363,15 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
 
     print_cell_info();
     mib_decoded = true;
+
+    if (!sync_notified) {
+      cond_var_cell_sync.notify_all();
+      sync_notified = true;
+    }
+
+    if (decode_sib) {
+      break;
+    }
   }
 
   if (!mib_decoded) {
@@ -368,8 +380,16 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
     return 1;
   }
 
+  // If SIB decoding is disabled, MIB decoding has already been running
+  // continuously until stop_signal is raised.
+  if (!decode_sib) {
+    return 0;
+  }
+
   // Notify main thread that synchronization has been done
-  cond_var_cell_sync.notify_all();
+  if (!sync_notified) {
+    cond_var_cell_sync.notify_all();
+  }
 
   // Compute mu, the numerology index for PDCCH/PDSCH
   // mu = log2(mib_object.scs / 15);

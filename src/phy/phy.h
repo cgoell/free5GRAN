@@ -46,6 +46,7 @@ class phy {
       time_first_pss;                     //< Time first PSS
   std::vector<std::complex<float>> buff;  //< Studied buffer
   BCCH_DL_SCH_Message_t* sib1 = nullptr;  //< SIB1 message
+  bool decode_sib = true;                 //< Flag enabling SIB decoding
   free5GRAN::ss_power_indicator ss_pwr =
       {};                            //< Synchronization signal power structure
   free5GRAN::rf_buffer* rf_buff;     //< Variables shared with RF containing
@@ -62,7 +63,8 @@ class phy {
       int scs,
       free5GRAN::band band_obj,
       free5GRAN::rf_buffer* rf_buff,
-      bool* stp_signal);
+      bool* stp_signal,
+      bool decode_sib);
   phy();
   ~phy();
 

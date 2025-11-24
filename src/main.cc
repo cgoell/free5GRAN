@@ -77,13 +77,15 @@ void search_cell_with_defined_params(double frequency,
                                      const string& iq_file_path,
                                      double iq_sample_rate,
                                      free5GRAN::band band,
-                                     int input_gain);
+                                     int input_gain,
+                                     bool decode_sib);
 void scan_bands(vector<free5GRAN::band> BANDS,
                 double ssb_period,
                 const string& rf_address,
                 const string& iq_file_path,
                 double iq_sample_rate,
-                int input_gain);
+                int input_gain,
+                bool decode_sib);
 void init_logging(const string& level);
 
 static bool stop_signal = false;
@@ -154,6 +156,8 @@ auto main(int argc, char* argv[]) -> int {
       cout << "Using IQ samples from file: " << iq_file_path << endl;
     }
     int gain = cfg.lookup("gain");
+    bool decode_sib = true;
+    root.lookupValue("decode_sib", decode_sib);
     // If receiver mode is search cell
     if (func == "CELL_SEARCH") {
       cout << "##  CELL SEARCH  ##" << endl;
@@ -193,7 +197,7 @@ auto main(int argc, char* argv[]) -> int {
             // Call search cell function
             search_cell_with_defined_params(frequency, ssb_period, rf_address,
                                             iq_file_path, iq_sample_rate,
-                                            band_obj, gain);
+                                            band_obj, gain, decode_sib);
           } else {
             // Missing a parameter
             cerr << "Missing parameters (frequency or GSCN) in config file"
@@ -233,7 +237,7 @@ auto main(int argc, char* argv[]) -> int {
       }
       // call function
       scan_bands(band_array, ssb_period, rf_address, iq_file_path,
-                 iq_sample_rate, gain);
+                 iq_sample_rate, gain, decode_sib);
     }
   } catch (const libconfig::SettingNotFoundException& nfex) {
     // Some parameters are missing
@@ -248,7 +252,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
                 const string& rf_address,
                 const string& iq_file_path,
                 double iq_sample_rate,
-                int input_gain) {
+                int input_gain,
+                bool decode_sib) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
   /*
    * Cell default parameters
@@ -403,7 +408,7 @@ void scan_bands(vector<free5GRAN::band> BANDS,
       int fft_size = (int)bandwidth / band_info.scs;
       // Instanciate a PHY layer
       phy phy_layer(rf_device, ssb_period, fft_size, band_info.scs,
-                    current_band, &rf_buff, &stop_signal);
+                    current_band, &rf_buff, &stop_signal, decode_sib);
 
     phy_initialization:
       // sync_object will contain synchronization variables that will be shared
@@ -500,7 +505,8 @@ void search_cell_with_defined_params(double frequency,
                                      const string& iq_file_path,
                                      double iq_sample_rate,
                                      free5GRAN::band band,
-                                     int input_gain) {
+                                     int input_gain,
+                                     bool decode_sib) {
   setenv("UHD_LOG_FASTPATH_DISABLE", "1", 0);
   /*
    * Cell parameters
@@ -616,7 +622,7 @@ void search_cell_with_defined_params(double frequency,
   int fft_size = (int)bandwidth / band_info.scs;
   // Instanciate a PHY layer
   phy phy_layer(rf_device, ssb_period, fft_size, band_info.scs, band, &rf_buff,
-                &stop_signal);
+                &stop_signal, decode_sib);
 
 phy_initialization:
   // sync_object will contain synchronization variables that will be shared
