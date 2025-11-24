@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "../../lib/asn1c/nr_rrc/BCCH-DL-SCH-Message.h"
@@ -433,7 +434,7 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   cond_var_cell_sync.notify_all();
 
   // Keep MIB information up-to-date on the console
-  boost::thread mib_refresh_thread(&phy::refresh_mib, this);
+  std::thread mib_refresh_thread(&phy::refresh_mib, this);
   mib_refresh_thread.detach();
 
   // Compute mu, the numerology index for PDCCH/PDSCH
