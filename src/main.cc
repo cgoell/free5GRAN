@@ -306,7 +306,6 @@ void scan_bands(vector<free5GRAN::band> BANDS,
 
   bool use_iq_file = !iq_file_path.empty();
   bool use_zmq_source = !zmq_sub_address.empty();
-  bool use_zmq_source = !zmq_sub_address.empty();
   /*
    * Find USRP device with input parameters parameters
    */

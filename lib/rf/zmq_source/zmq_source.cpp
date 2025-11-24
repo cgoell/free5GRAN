@@ -22,7 +22,7 @@ free5GRAN::zmq_source::zmq_source(const std::string& address,
   this->rf_buff = rf_buff;
 
   try {
-    socket.setsockopt(ZMQ_SUBSCRIBE, "", 0);
+    socket.set(zmq::sockopt::subscribe, "");
     socket.connect(address);
   } catch (const zmq::error_t& err) {
     throw runtime_error("Could not connect to ZMQ publisher at " + address +
