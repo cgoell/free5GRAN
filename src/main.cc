@@ -476,7 +476,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
         // Re-init variables and buffers
         rf_buff.frame_thread_started = false;
         rf_buff.frame_buffer->clear();
-        rf_buff.cond_var_vec_frame_buffer->clear();
+        rf_buff.cond_var_vec_frame_buffer->assign(buffer_size,
+                                                   condition_variable());
         // Add cell to found cells
         found_cell new_cell;
         new_cell.band_obj = current_band;
