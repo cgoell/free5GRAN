@@ -23,6 +23,7 @@
 #include <boost/log/trivial.hpp>
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/file.hpp>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -76,6 +77,7 @@ void phy::print_cell_info() {
    * \fn print_cell_info
    * \brief Print cells global informations and MIB.
    */
+  cout << "\033[2J\033[H";  // Clear console and reset cursor position
   cout << "\n";
   cout << "###### RADIO" << endl;
   cout << "# SSB Power: " + to_string(ss_pwr.received_power) + " db" << endl;
@@ -213,86 +215,102 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
    * \param[in] sync_object: Structure containing synchronization variables
    * \param[in] cond_var_cell_sync: Condition variable for notifying cell
    * synchronization
-   */
+  */
   /*
    * Get 1 SSB period of signal
    */
   int number_of_frames = ceil(ssb_period / 0.01);  // = 10ms
-  // Create a vector of frames containing 1 SSB period of signal
-  vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
   // Compute the number of samples in a frame
   frame_size = 0.01 * rf_device->getSampleRate();
-  // Create a vector containing all the frames for 1 SSB period (consecutively)
-  vector<complex<float>> merged_frames(number_of_frames * frame_size);
 
   mutex m;
-  // Loop over all the frames
-  for (int i = 0; i < frames_buffer.size(); i++) {
-    // Deactivate timeout switch
-    bool timeout = false;
-    // If the i-th frame is not yet in buffer
-    if (rf_buff->primary_buffer->size() < i + 1) {
+  bool mib_decoded = false;
+  while (!mib_decoded && !(*stop_signal)) {
+    // Create a vector of frames containing 1 SSB period of signal
+    vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
+    // Create a vector containing all the frames for 1 SSB period (consecutively)
+    vector<complex<float>> merged_frames(number_of_frames * frame_size);
+
+    // Wait until enough frames are available
+    if (rf_buff->primary_buffer->size() < number_of_frames) {
       unique_lock<mutex> lk(m);
-      // Wait for it with a timeout of 2sec
-      (*rf_buff->cond_var_vec_prim_buffer)[i].wait_for(lk,
-                                                       std::chrono::seconds(2));
+      (*rf_buff->cond_var_vec_prim_buffer)[number_of_frames - 1].wait_for(
+          lk, std::chrono::seconds(2));
       lk.unlock();
     }
-    // If the i-th frame is still not in buffer,
-    // timeout occured
-    if (rf_buff->primary_buffer->size() < i + 1) {
-      // Activate timeout switch
-      timeout = true;
+
+    // Use the most recent frames available
+    int frame_offset =
+        max(0, (int)rf_buff->primary_buffer->size() - number_of_frames);
+
+    // Loop over all the frames
+    for (int i = 0; i < frames_buffer.size(); i++) {
+      // Deactivate timeout switch
+      bool timeout = false;
+      int buffer_index = frame_offset + i;
+      // If the i-th frame is not yet in buffer
+      if (rf_buff->primary_buffer->size() < buffer_index + 1) {
+        unique_lock<mutex> lk(m);
+        // Wait for it with a timeout of 2sec
+        (*rf_buff->cond_var_vec_prim_buffer)[buffer_index].wait_for(
+            lk, std::chrono::seconds(2));
+        lk.unlock();
+      }
+      // If the i-th frame is still not in buffer,
+      // timeout occured
+      if (rf_buff->primary_buffer->size() < buffer_index + 1) {
+        // Activate timeout switch
+        timeout = true;
+      }
+      // Get the i-th frame
+      frames_buffer[i] = (*rf_buff->primary_buffer)[buffer_index];
+      if (frames_buffer[i].overflow || timeout) {
+        // If timeout or overflow in frame, end function witth failure
+        cout << "OVERFLOW DETECTED IN PHY" << endl;
+        sync_object.mib_crc_val = false;
+        // Notify function ended
+        cond_var_cell_sync.notify_all();
+        return 1;
+      }
+      // Add the content of i-th frame to the merged_frames buffer
+      for (int j = 0; j < frame_size; j++) {
+        merged_frames[i * frame_size + j] = frames_buffer[i].buffer[j];
+      }
     }
-    // Get the i-th frame
-    frames_buffer[i] = (*rf_buff->primary_buffer)[i];
-    if (frames_buffer[i].overflow || timeout) {
-      // If timeout or overflow in frame, end function witth failure
-      cout << "OVERFLOW DETECTED IN PHY" << endl;
+    // Write the content of merged_frames to a file
+    /*
+    ofstream data2;
+    data2.open("merged_frames.txt");
+    for (int i = 0; i < number_of_frames * frame_size; i++) {
+      data2 << merged_frames[i];
+      data2 << "\n";
+    }
+    data2.close();
+     */
+
+    int pss_start_index;
+    float received_power;
+    auto start = chrono::high_resolution_clock::now();
+    // Search SSB, synchronize with cell and decode PBCH and BCH to extract MIB
+    // merged_frames is the buffer containing one SSB period of signal
+    // pss_start_index is the starting sample of PSS which provides time-domain
+    // synchronization received_power is the SSB received power in dB, used for
+    // gain up / down ramping
+    free5GRAN::phy::signal_processing::synchronize_and_extract_pbch(
+        merged_frames, pss_start_index, received_power, this->current_bwp,
+        this->pci, this->freq_offset, this->rf_device->getSampleRate(),
+        this->i_ssb, this->ss_pwr, this->mib_object, this->l_max);
+    ss_pwr.received_power = received_power;
+    // If received power greater than -2dB, then there might be saturation and
+    // reception will fail
+    if (received_power > -2) {
       sync_object.mib_crc_val = false;
-      // Notify function ended
+      sync_object.received_power = received_power;
       cond_var_cell_sync.notify_all();
       return 1;
     }
-    // Add the content of i-th frame to the merged_frames buffer
-    for (int j = 0; j < frame_size; j++) {
-      merged_frames[i * frame_size + j] = frames_buffer[i].buffer[j];
-    }
-  }
-  // Write the content of merged_frames to a file
-  /*
-  ofstream data2;
-  data2.open("merged_frames.txt");
-  for (int i = 0; i < number_of_frames * frame_size; i++) {
-    data2 << merged_frames[i];
-    data2 << "\n";
-  }
-  data2.close();
-   */
-
-  int pss_start_index;
-  float received_power;
-  auto start = chrono::high_resolution_clock::now();
-  // Search SSB, synchronize with cell and decode PBCH and BCH to extract MIB
-  // merged_frames is the buffer containing one SSB period of signal
-  // pss_start_index is the starting sample of PSS which provides time-domain
-  // synchronization received_power is the SSB received power in dB, used for
-  // gain up / down ramping
-  free5GRAN::phy::signal_processing::synchronize_and_extract_pbch(
-      merged_frames, pss_start_index, received_power, this->current_bwp,
-      this->pci, this->freq_offset, this->rf_device->getSampleRate(),
-      this->i_ssb, this->ss_pwr, this->mib_object, this->l_max);
-  ss_pwr.received_power = received_power;
-  // If received power greater than -2dB, then there might be saturation and
-  // reception will fail
-  if (received_power > -2) {
-    sync_object.mib_crc_val = false;
-    sync_object.received_power = received_power;
-    cond_var_cell_sync.notify_all();
-    return 1;
-  }
-  auto end = chrono::high_resolution_clock::now();
-  auto duration = chrono::duration_cast<chrono::microseconds>(end - start);
+    auto end = chrono::high_resolution_clock::now();
+    auto duration = chrono::duration_cast<chrono::microseconds>(end - start);
 
   /*
   int num_symbols_per_subframe_pbch =
@@ -306,44 +324,52 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   num_symbols_per_subframe_pbch, &cp_lengths_pbch[0], &cum_sum_pbch[0]);
       */
 
-  // Extract the symbol in frame where SSB has been found based on i ssb
-  int symbol_in_frame = band_object.ssb_pattern.ssb_start_symbols[this->i_ssb];
-  // Compute the index of the first PSS sample in a radio frame based
-  int num_samples_before_pss =
-      (symbol_in_frame / free5GRAN::NUMBER_SYMBOLS_PER_SLOT_NORMAL_CP) *
-          (15e3 / this->current_bwp->getScs() * frame_size / 10.0) +
-      this->current_bwp
-          ->getCumSumCpLengths()[symbol_in_frame %
-                                 free5GRAN::NUMBER_SYMBOLS_PER_SLOT_NORMAL_CP] +
-      mib_object.half_frame_index * frame_size * 0.5;
+    // Extract the symbol in frame where SSB has been found based on i ssb
+    int symbol_in_frame = band_object.ssb_pattern.ssb_start_symbols[this->i_ssb];
+    // Compute the index of the first PSS sample in a radio frame based
+    int num_samples_before_pss =
+        (symbol_in_frame / free5GRAN::NUMBER_SYMBOLS_PER_SLOT_NORMAL_CP) *
+            (15e3 / this->current_bwp->getScs() * frame_size / 10.0) +
+        this->current_bwp->getCumSumCpLengths()
+            [symbol_in_frame % free5GRAN::NUMBER_SYMBOLS_PER_SLOT_NORMAL_CP] +
+        mib_object.half_frame_index * frame_size * 0.5;
 
-  // Compute radio frame starting point relatively to the primary frame buffer
-  int point_0_index = pss_start_index - num_samples_before_pss;
-  int frame_id_point_0;
-  if (point_0_index < 0) {
-    frame_id_point_0 = frames_buffer[0].frame_id - 1;
-  } else {
-    frame_id_point_0 = frames_buffer[point_0_index / frame_size].frame_id;
+    // Compute radio frame starting point relatively to the primary frame buffer
+    int point_0_index = pss_start_index - num_samples_before_pss;
+    int frame_id_point_0;
+    if (point_0_index < 0) {
+      frame_id_point_0 = frames_buffer[0].frame_id - 1;
+    } else {
+      frame_id_point_0 = frames_buffer[point_0_index / frame_size].frame_id;
+    }
+    // Create a sync object
+    sync_object = {.frame_id = frame_id_point_0,
+                   .sfn = mib_object.sfn,
+                   .sync_index = point_0_index % frame_size,
+                   .pci = pci,
+                   .pss_index = num_samples_before_pss,
+                   .common_cp_length = this->current_bwp->getCpLengths()[1],
+                   .fft_size_ssb = this->current_bwp->getFftSize(),
+                   .mib_crc_val = mib_object.crc_validated,
+                   .received_power = received_power,
+                   .freq_offset = freq_offset,
+                   .ssb_period = ssb_period};
+    if (!mib_object.crc_validated) {
+      continue;
+    }
+
+    print_cell_info();
+    mib_decoded = true;
   }
-  // Create a sync object
-  sync_object = {.frame_id = frame_id_point_0,
-                 .sfn = mib_object.sfn,
-                 .sync_index = point_0_index % frame_size,
-                 .pci = pci,
-                 .pss_index = num_samples_before_pss,
-                 .common_cp_length = this->current_bwp->getCpLengths()[1],
-                 .fft_size_ssb = this->current_bwp->getFftSize(),
-                 .mib_crc_val = mib_object.crc_validated,
-                 .received_power = received_power,
-                 .freq_offset = freq_offset,
-                 .ssb_period = ssb_period};
+
+  if (!mib_decoded) {
+    sync_object.mib_crc_val = false;
+    cond_var_cell_sync.notify_all();
+    return 1;
+  }
+
   // Notify main thread that synchronization has been done
   cond_var_cell_sync.notify_all();
-  if (!mib_object.crc_validated) {
-    return 1;
-  } else {
-    print_cell_info();
-  }
 
   // Compute mu, the numerology index for PDCCH/PDSCH
   // mu = log2(mib_object.scs / 15);
