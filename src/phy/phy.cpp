@@ -138,6 +138,12 @@ void phy::refresh_mib() {
     for (int i = 0; i < frames_buffer.size(); i++) {
       bool timeout = false;
       int buffer_index = frame_offset + i;
+      if (buffer_index >= rf_buff->primary_buffer->capacity() ||
+          buffer_index >=
+              static_cast<int>(rf_buff->cond_var_vec_prim_buffer->size())) {
+        abort_iteration = true;
+        break;
+      }
       if (rf_buff->primary_buffer->size() < buffer_index + 1) {
         unique_lock<mutex> lk(m);
         (*rf_buff->cond_var_vec_prim_buffer)[buffer_index].wait_for(
@@ -148,7 +154,8 @@ void phy::refresh_mib() {
         timeout = true;
       }
       frames_buffer[i] = (*rf_buff->primary_buffer)[buffer_index];
-      if (frames_buffer[i].overflow || timeout) {
+      if (frames_buffer[i].overflow || timeout ||
+          frames_buffer[i].buffer.size() < frame_size) {
         abort_iteration = true;
         break;
       }
@@ -310,6 +317,15 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
       // Deactivate timeout switch
       bool timeout = false;
       int buffer_index = frame_offset + i;
+      // If requested buffer index is out of the allocated range, abort
+      if (buffer_index >= rf_buff->primary_buffer->capacity() ||
+          buffer_index >=
+              static_cast<int>(rf_buff->cond_var_vec_prim_buffer->size())) {
+        cout << "PRIMARY BUFFER INDEX OUT OF RANGE" << endl;
+        sync_object.mib_crc_val = false;
+        cond_var_cell_sync.notify_all();
+        return 1;
+      }
       // If the i-th frame is not yet in buffer
       if (rf_buff->primary_buffer->size() < buffer_index + 1) {
         unique_lock<mutex> lk(m);
@@ -326,7 +342,8 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
       }
       // Get the i-th frame
       frames_buffer[i] = (*rf_buff->primary_buffer)[buffer_index];
-      if (frames_buffer[i].overflow || timeout) {
+      if (frames_buffer[i].overflow || timeout ||
+          frames_buffer[i].buffer.size() < frame_size) {
         // If timeout or overflow in frame, end function witth failure
         cout << "OVERFLOW DETECTED IN PHY" << endl;
         sync_object.mib_crc_val = false;
