@@ -50,6 +50,13 @@ void compute_fine_frequency_offset(vector<complex<float>> input_signal,
                                    float& output,
                                    int num_symbols);
 
+void compute_coarse_frequency_offset(const vector<complex<float>>& input_signal,
+                                     int start_index,
+                                     int window_length,
+                                     int lag,
+                                     float sample_rate,
+                                     float& output);
+
 void transpose_signal(vector<complex<float>>* input_signal,
                       float freq_offset,
                       int sample_rate,
