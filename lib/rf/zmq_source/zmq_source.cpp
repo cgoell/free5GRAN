@@ -1,5 +1,6 @@
 #include "zmq_source.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -88,11 +89,24 @@ void free5GRAN::zmq_source::start_loopback_recv(bool& stop_signal,
     }
 
     new_elem.overflow = false;
-    size_t received = receive_samples(new_elem.buffer, 0, buff_size);
-    if (received < buff_size) {
+    size_t total_received = 0;
+
+    while (total_received < buff_size) {
+      size_t received = receive_samples(new_elem.buffer, total_received,
+                                        buff_size - total_received);
+      if (received == 0) {
+        break;
+      }
+      total_received += received;
+    }
+
+    if (total_received < buff_size) {
+      std::fill(new_elem.buffer.begin() + total_received,
+                new_elem.buffer.begin() + buff_size, std::complex<float>(0, 0));
       new_elem.overflow = true;
     }
-    sample_offset += received;
+
+    sample_offset += total_received;
 
     new_elem.frame_id = primary_frame_id;
     rf_buff->primary_buffer->push_back(new_elem);
