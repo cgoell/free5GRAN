@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -227,8 +228,25 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   frame_size = 0.01 * rf_device->getSampleRate();
 
   mutex m;
+  size_t last_processed_frame_id = numeric_limits<size_t>::max();
   bool sync_notified = false;
   while (!(*stop_signal)) {
+    // Avoid reprocessing the same data when continuous MIB decoding is enabled.
+    if (last_processed_frame_id != numeric_limits<size_t>::max() &&
+        rf_buff->primary_buffer->size() > 0) {
+      size_t latest_frame_id =
+          (*rf_buff->primary_buffer)[rf_buff->primary_buffer->size() - 1]
+              .frame_id;
+      if (latest_frame_id <= last_processed_frame_id) {
+        unique_lock<mutex> lk(m);
+        (*rf_buff->cond_var_vec_prim_buffer)[rf_buff->primary_buffer->size() -
+                                             1]
+            .wait_for(lk, std::chrono::milliseconds(50));
+        lk.unlock();
+        continue;
+      }
+    }
+
     // Create a vector of frames containing 1 SSB period of signal
     vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
     // Create a vector containing all the frames for 1 SSB period (consecutively)
@@ -242,9 +260,30 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
       lk.unlock();
     }
 
-    // Use the most recent frames available
+    // Use the earliest set of frames that move past the last processed frame to
+    // minimize SFN jumps during continuous decoding.
     int frame_offset =
         max(0, (int)rf_buff->primary_buffer->size() - number_of_frames);
+    if (last_processed_frame_id != numeric_limits<size_t>::max()) {
+      int next_index = -1;
+      for (int idx = 0; idx < rf_buff->primary_buffer->size(); idx++) {
+        if ((*rf_buff->primary_buffer)[idx].frame_id >
+            last_processed_frame_id) {
+          next_index = idx;
+          break;
+        }
+      }
+      if (next_index == -1) {
+        unique_lock<mutex> lk(m);
+        (*rf_buff->cond_var_vec_prim_buffer)[rf_buff->primary_buffer->size() -
+                                             1]
+            .wait_for(lk, std::chrono::milliseconds(50));
+        lk.unlock();
+        continue;
+      }
+
+      frame_offset = max(0, next_index - number_of_frames + 1);
+    }
 
     // Loop over all the frames
     for (int i = 0; i < frames_buffer.size(); i++) {
@@ -366,6 +405,8 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
       cond_var_cell_sync.notify_all();
       sync_notified = true;
     }
+
+    last_processed_frame_id = frames_buffer.back().frame_id;
 
     // Continue to refresh MIB contents if requested; otherwise exit after the
     // first validated decode.
