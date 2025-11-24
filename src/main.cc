@@ -372,7 +372,6 @@ void scan_bands(vector<free5GRAN::band> BANDS,
        * Reconfigure RF device and instanciate a phy object
        */
       freq = free5GRAN::phy::signal_processing::compute_freq_from_gscn(gscn);
-      bool local_stop_signal = false;
 
       BOOST_LOG_TRIVIAL(info) << "Scanning gscn= " + to_string(gscn) +
                                      " and freq= " + to_string(freq / 1e6) +
@@ -438,35 +437,8 @@ void scan_bands(vector<free5GRAN::band> BANDS,
           }
         }
       } else {
-        // If CRC validated
-        // cont_sync_sem is a semaphore variable for synchronizing adjust and
-        // resynchronization threads
-        sem_t cont_sync_sem;
-        sync_object.cont_sync_sem = &cont_sync_sem;
-        sem_init(sync_object.cont_sync_sem, 1, 0);
-
-        // resync_thread will resynchronize with cell continuously
-        boost::thread resync_thread([rf_device, &sync_object,
-                                     &capture0 = stop_signal,
-                                     &local_stop_signal] {
-          rf_device->resynchronization(sync_object, capture0,
-                                       local_stop_signal);
-        });
-        // adjust_thread continuously adjusts primary frames into
-        // gNodeB-synchronized frames
-        boost::thread adjust_thread(
-            [rf_device, &sync_object, capture0 = 0.01 * bandwidth,
-             &capture1 = stop_signal, &local_stop_signal] {
-              rf_device->adjust_frames(sync_object, capture0, capture1,
-                                       local_stop_signal);
-            });
-
-        // Wait PHY init to finish
+        // If CRC validated, wait PHY init to finish (MIB-only)
         phy_init.join();
-        // Stop resync and adjust threads
-        local_stop_signal = true;
-        resync_thread.join();
-        adjust_thread.join();
         // Re-init variables and buffers
         rf_buff.frame_thread_started = false;
         rf_buff.frame_buffer->clear();
@@ -651,31 +623,7 @@ phy_initialization:
       goto phy_initialization;
     }
   }
-  // If CRC validated
-  bool local_stop_signal = false;
-  // cont_sync_sem is a semaphore variable for synchronizing adjust and
-  // resynchronization threads
-  sem_t cont_sync_sem;
-  sync_object.cont_sync_sem = &cont_sync_sem;
-  sem_init(sync_object.cont_sync_sem, 1, 0);
-
-  // resync_thread will resynchronize with cell continuously
-  boost::thread resync_thread(
-      [rf_device, &sync_object, &capture0 = stop_signal, &local_stop_signal] {
-        rf_device->resynchronization(sync_object, capture0, local_stop_signal);
-      });
-  // adjust_thread continuously adjusts primary frames into gNodeB-synchronized
-  // frames
-  boost::thread adjust_thread([rf_device, &sync_object,
-                               capture0 = 0.01 * bandwidth,
-                               &capture1 = stop_signal, &local_stop_signal] {
-    rf_device->adjust_frames(sync_object, capture0, capture1,
-                             local_stop_signal);
-  });
-
-  // Stop receive, resync and adjust threads
-  resync_thread.join();
-  adjust_thread.join();
+  // If CRC validated, MIB decoding is complete; stop receive thread
   recv_thread.join();
   free5GRAN::utils::common_utils::destroy_fft_plans();
 }
