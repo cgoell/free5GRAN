@@ -46,10 +46,14 @@ ADD_LIBRARY( free5GRAN_lib STATIC
         lib/rf/usrp_b200/usrp_b200.h
         lib/rf/usrp_x300/usrp_x300.cpp
         lib/rf/usrp_x300/usrp_x300.h
+        lib/rf/zmq_source/zmq_source.cpp
+        lib/rf/zmq_source/zmq_source.h
         lib/phy/bwp/bwp.cpp
         lib/phy/bwp/bwp.h)
 
-target_link_libraries(free5GRAN_lib asn1c_lib ${GR_LIBRARIES} ${Boost_LIBRARIES} boost_system boost_log boost_thread boost_log_setup)
+find_library(ZMQ_LIBRARY NAMES zmq)
+
+target_link_libraries(free5GRAN_lib asn1c_lib ${GR_LIBRARIES} ${Boost_LIBRARIES} boost_system boost_log boost_thread boost_log_setup ${ZMQ_LIBRARY})
 
 if (INCLUDE_N210)
     message("INCLUDING N210")
@@ -76,7 +80,7 @@ find_package (Threads)
 
 
 ADD_DEFINITIONS(-DBOOST_LOG_DYN_LINK)
-target_link_libraries(free5GRAN asn1c_lib ${GR_LIBRARIES} free5GRAN_lib uhd ${Boost_LIBRARIES} boost_system m fftw3 ${CMAKE_THREAD_LIBS_INIT} config++ boost_log boost_thread boost_log_setup)
+target_link_libraries(free5GRAN asn1c_lib ${GR_LIBRARIES} free5GRAN_lib uhd ${Boost_LIBRARIES} boost_system m fftw3 ${CMAKE_THREAD_LIBS_INIT} config++ boost_log boost_thread boost_log_setup ${ZMQ_LIBRARY})
 
 install(TARGETS free5GRAN DESTINATION /usr/local/bin)
 install(DIRECTORY config DESTINATION /root/.config/free5GRAN)
