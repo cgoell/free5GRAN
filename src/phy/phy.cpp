@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "../../lib/asn1c/nr_rrc/BCCH-DL-SCH-Message.h"
@@ -113,6 +114,67 @@ void phy::print_cell_info() {
           "###"
        << endl;
   cout << "\n";
+}
+
+void phy::refresh_mib() {
+  int number_of_frames = ceil(ssb_period / 0.01);
+  mutex m;
+  while (!(*stop_signal)) {
+    if (rf_buff->primary_buffer->size() < number_of_frames) {
+      unique_lock<mutex> lk(m);
+      (*rf_buff->cond_var_vec_prim_buffer)[number_of_frames - 1].wait_for(
+          lk, std::chrono::seconds(2));
+      lk.unlock();
+      continue;
+    }
+
+    vector<free5GRAN::buffer_element> frames_buffer(number_of_frames);
+    vector<complex<float>> merged_frames(number_of_frames * frame_size);
+
+    int frame_offset =
+        max(0, (int)rf_buff->primary_buffer->size() - number_of_frames);
+
+    bool abort_iteration = false;
+    for (int i = 0; i < frames_buffer.size(); i++) {
+      bool timeout = false;
+      int buffer_index = frame_offset + i;
+      if (rf_buff->primary_buffer->size() < buffer_index + 1) {
+        unique_lock<mutex> lk(m);
+        (*rf_buff->cond_var_vec_prim_buffer)[buffer_index].wait_for(
+            lk, std::chrono::seconds(2));
+        lk.unlock();
+      }
+      if (rf_buff->primary_buffer->size() < buffer_index + 1) {
+        timeout = true;
+      }
+      frames_buffer[i] = (*rf_buff->primary_buffer)[buffer_index];
+      if (frames_buffer[i].overflow || timeout) {
+        abort_iteration = true;
+        break;
+      }
+      for (int j = 0; j < frame_size; j++) {
+        merged_frames[i * frame_size + j] = frames_buffer[i].buffer[j];
+      }
+    }
+
+    if (abort_iteration) {
+      continue;
+    }
+
+    int pss_start_index;
+    float received_power;
+    free5GRAN::phy::signal_processing::synchronize_and_extract_pbch(
+        merged_frames, pss_start_index, received_power, this->current_bwp,
+        this->pci, this->freq_offset, this->rf_device->getSampleRate(),
+        this->i_ssb, this->ss_pwr, this->mib_object, this->l_max);
+    ss_pwr.received_power = received_power;
+
+    if (received_power > -2 || !mib_object.crc_validated) {
+      continue;
+    }
+
+    print_cell_info();
+  }
 }
 
 void phy::print_dci_info() {
@@ -371,6 +433,10 @@ auto phy::init(free5GRAN::synchronization_object& sync_object,
   // Notify main thread that synchronization has been done
   cond_var_cell_sync.notify_all();
 
+  // Keep MIB information up-to-date on the console
+  std::thread mib_refresh_thread(&phy::refresh_mib, this);
+  mib_refresh_thread.detach();
+
   // Compute mu, the numerology index for PDCCH/PDSCH
   // mu = log2(mib_object.scs / 15);
   // Compute the number of slots per frame for PDCCH/PDSCH
@@ -503,7 +569,6 @@ extract_dci_and_sib:
       }
       dci_1_0_si_rnti.crc_validated = validated;
       if (dci_found) {
-        print_dci_info();
         // Extract SIB1
         // extract_pdsch(frame_data, this->current_bwp, n0 + monitoring_slot);
         vector<int> pdsch_bits;
@@ -526,8 +591,6 @@ extract_dci_and_sib:
               (void**)&sib1, dl_sch_bytes, bytes_size);
           if (dec_rval.code == RC_OK) {
             BOOST_LOG_TRIVIAL(trace) << "SIB1 parsing succeeded";
-          } else {
-            BOOST_LOG_TRIVIAL(trace) << "SIB1 parsing failed";
           }
           print_sib1();
         }
@@ -538,7 +601,6 @@ extract_dci_and_sib:
   }
   // If dci successfully decoded
   if (!dci_found && !*stop_signal) {
-    cout << "SIB1 data could not be decoded ! Retrying immediately" << endl;
     goto extract_dci_and_sib;
   }
   return 0;

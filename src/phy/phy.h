@@ -78,6 +78,8 @@ class phy {
 
   void print_sib1();
 
+  void refresh_mib();
+
   auto getSIB1RV() -> int;
 
   void printSize() {
