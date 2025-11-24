@@ -41,6 +41,7 @@ class zmq_source : public rf {
   std::string address;
   std::mutex socket_mutex;
   uint64_t sample_offset = 0;
+  float gain_linear = 1.0f;
 
   size_t receive_samples(std::vector<std::complex<float>>& buff,
                          size_t offset,

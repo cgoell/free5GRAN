@@ -1,6 +1,7 @@
 #include "zmq_source.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -19,6 +20,7 @@ free5GRAN::zmq_source::zmq_source(const std::string& address,
   this->sample_rate = sample_rate;
   this->center_frequency = center_frequency;
   this->gain = gain;
+  this->gain_linear = powf(10.0f, static_cast<float>(gain) / 20.0f);
   this->bandwidth = sample_rate;
   this->rf_buff = rf_buff;
 
@@ -65,7 +67,10 @@ void free5GRAN::zmq_source::setCenterFrequency(double freq) {
   this->center_frequency = freq;
 }
 
-void free5GRAN::zmq_source::setGain(double gain) { this->gain = gain; }
+void free5GRAN::zmq_source::setGain(double gain) {
+  this->gain = gain;
+  this->gain_linear = powf(10.0f, static_cast<float>(gain) / 20.0f);
+}
 
 auto free5GRAN::zmq_source::getGain() -> double { return this->gain; }
 
@@ -156,6 +161,11 @@ size_t free5GRAN::zmq_source::receive_samples(
   if (copied_samples > 0) {
     memcpy(reinterpret_cast<char*>(&buff[offset]), message.data(),
            copied_samples * sizeof(complex<float>));
+    if (gain_linear != 1.0f) {
+      for (size_t i = 0; i < copied_samples; i++) {
+        buff[offset + i] *= gain_linear;
+      }
+    }
   }
 
   return copied_samples;
