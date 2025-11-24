@@ -344,6 +344,50 @@ void free5GRAN::phy::signal_processing::compute_fine_frequency_offset(
   output = scs * phase_offset / (2 * M_PI);
 }
 
+void free5GRAN::phy::signal_processing::compute_coarse_frequency_offset(
+    const vector<complex<float>>& input_signal,
+    int start_index,
+    int window_length,
+    int lag,
+    float sample_rate,
+    float& output) {
+  /**
+   * \fn compute_coarse_frequency_offset
+   * \brief Estimate coarse frequency offset by accumulating the conjugate
+   * product of a signal and its delayed version. This estimator is less
+   * sensitive to noise and phase wrapping than the CP-based estimator and can
+   * tolerate larger residual offsets.
+   *
+   * \param[in] input_signal: Received signal
+   * \param[in] start_index: Start index of the window inside input_signal
+   * \param[in] window_length: Number of samples to use for estimation
+   * \param[in] lag: Sample lag used for the conjugate product
+   * \param[in] sample_rate: Signal sample rate
+   * \param[out] output: Estimated coarse frequency offset in Hertz
+   */
+
+  // Sanity checks to avoid out-of-bounds access
+  if (start_index < 0 || lag <= 0 ||
+      start_index + window_length + lag > input_signal.size()) {
+    output = 0;
+    return;
+  }
+
+  complex<float> accumulator = 0;
+  int usable_window = window_length - lag;
+  for (int i = 0; i < usable_window; i++) {
+    accumulator += conj(input_signal[start_index + i]) *
+                   input_signal[start_index + i + lag];
+  }
+
+  if (accumulator == complex<float>(0, 0) || usable_window <= 0) {
+    output = 0;
+    return;
+  }
+
+  output = sample_rate * arg(accumulator) / (2 * M_PI * (float)lag);
+}
+
 void free5GRAN::phy::signal_processing::transpose_signal(
     vector<complex<float>>* input_signal,
     float freq_offset,
@@ -873,6 +917,26 @@ auto free5GRAN::phy::signal_processing::synchronize_and_extract_pbch(
   int sss_init_index = pss_start_index + 2 * symbol_duration + bwp -> getCommonCpLength();
 
   /*
+   * Apply a coarse frequency correction on the PSS symbol using a lag-based
+   * estimator to better tolerate large offsets before fine CP-based
+   * estimation.
+   */
+  float coarse_freq_offset = 0;
+  int coarse_lag = max(1, symbol_duration / 8);
+  int coarse_window =
+      min(symbol_duration, (int)buffer.size() - buffer_pss_index - coarse_lag);
+  if (coarse_window > coarse_lag) {
+    free5GRAN::phy::signal_processing::compute_coarse_frequency_offset(
+        buffer, buffer_pss_index, coarse_window, coarse_lag, sampling_rate,
+        coarse_freq_offset);
+    free5GRAN::phy::signal_processing::transpose_signal(
+        &buffer, coarse_freq_offset, sampling_rate, buffer.size());
+    freq_offset = coarse_freq_offset;
+  } else {
+    freq_offset = 0;
+  }
+
+  /*
    * Extracting the SSS signal based on sss_init_index and common_cp_length
    */
   vector<complex<float>> sss_signal(bwp -> getFftSize());
@@ -910,13 +974,19 @@ auto free5GRAN::phy::signal_processing::synchronize_and_extract_pbch(
    * Getting phase offset between CP and corresponding part of the OFDM symbol
    * for each of the 4 symbols. phase_offset is the mean phase offset
    */
+  float fine_freq_offset = 0;
   free5GRAN::phy::signal_processing::compute_fine_frequency_offset(
-      ssb_signal, symbol_duration, bwp -> getFftSize(), bwp -> getCommonCpLength(), bwp -> getScs(), freq_offset,
+      ssb_signal, symbol_duration, bwp -> getFftSize(), bwp -> getCommonCpLength(), bwp -> getScs(), fine_freq_offset,
       free5GRAN::NUM_SYMBOLS_SSB);
 
   // Correcting signal based on frequency offset
   free5GRAN::phy::signal_processing::transpose_signal(
-      &buffer, freq_offset, sampling_rate, buffer.size());
+      &buffer, fine_freq_offset, sampling_rate, buffer.size());
+  freq_offset += fine_freq_offset;
+
+  for (int i = 0; i < free5GRAN::NUM_SYMBOLS_SSB * symbol_duration; i++) {
+    ssb_signal[i] = buffer[i + buffer_pss_index];
+  }
 
   /*
    * Extracting DMRS AND PBCH modulation samples
